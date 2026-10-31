@@ -496,6 +496,8 @@ For scheduled ingestion, run `20_ingestion_publication` with `AUTO_RUN_INGESTION
 
 Free Edition currently permits a limited AI Search endpoint; this project omits it because exact search is sufficient for the small corpus, not because the service is categorically unavailable.
 
+Core retrieval demonstrated; evaluation tooling is under development.
+
 Implemented on this branch: Stage 2 — best-effort operational request logging, grain-documented curated views, failure-safe test fixture cleanup, and a reusable evaluation harness with persisted results. Stages 3–4 — the AI/BI dashboard and the Genie analytics agent (both **draft**: the dashboard is not shared and has a widget-less `embedding_activity` dataset; the Genie agent awaits pasted instructions and question validation). Still **not executed/verified**: `65_stage2_verification` and any evaluation run — see [Remaining verification](#remaining-verification).
 
 Additional scope boundaries:
