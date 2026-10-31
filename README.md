@@ -4,9 +4,11 @@
 
 Retrieve knowledge from the latest eligible version of a document—even when its filename changes—while retaining earlier versions for traceability.
 
-This project combines embedded document metadata, Delta-based version tracking, section-aware chunking, persisted embeddings, and grounded answers. It is organized as a set of focused Databricks notebooks in a Git folder: a centralized configuration notebook, reusable framework/ingestion/retrieval modules, and clearly separated demo and test notebooks. It was developed and demonstrated in Databricks Free Edition using real embedding and language-model inference.
+This project combines embedded document metadata, Delta-based version tracking, section-aware chunking, persisted embeddings, and grounded answers. It is organized as a set of focused Databricks notebooks in a Git folder: a centralized configuration notebook, reusable framework/ingestion/retrieval modules, and clearly separated demo and test notebooks. It was developed and demonstrated in Databricks Free Edition using real embedding and language-model inference. Stage 2 adds best-effort operational request logging, grain-documented curated views, and a reusable evaluation harness with persisted, granular results.
 
 **Core principle:** document eligibility is enforced by the data pipeline and retrieval logic before evidence reaches the model. A prompt alone does not decide which version is current.
+
+**Conceptual background:** [Maintaining Current and Traceable Knowledge in AI-Enabled Agricultural Advisory Systems](https://medium.com/@sridevi.loya/maintaining-current-and-traceable-knowledge-in-ai-enabled-agricultural-advisory-systems-15c555ed0e02) (Sridevi Loya, Medium, September 18, 2026) discusses why AI-enabled agricultural advisory systems need stable document identity, retained version history, lifecycle metadata, and traceable answers. The article is a conceptual treatment of the problem space — it does not document or validate this code. This repository implements the retrieval core of that idea: latest-eligible accepted-version retrieval with retained history and version-checked citations. Business approval workflows, document expiry/withdrawal, and full lifecycle governance are **not** implemented.
 
 > **Implementation and evidence:** This README describes the Python notebook project in this folder and its captured outputs, executed and validated in this workspace on October 31, 2026. It documents a notebook-hosted RAG framework, not a deployed autonomous agent or production service. All agriculture content and intervals are fictional demonstration data.
 
@@ -19,6 +21,7 @@ This project combines embedded document metadata, Delta-based version tracking, 
 - [How the pipeline works](#how-the-pipeline-works)
 - [Metadata and version rules](#metadata-and-version-rules)
 - [Data objects](#data-objects)
+- [Operational analytics: dashboard and Genie](#operational-analytics-dashboard-and-genie)
 - [Quick start](#quick-start)
 - [Demonstration and validation](#demonstration-and-validation)
 - [Where it can be applied](#where-it-can-be-applied)
@@ -87,24 +90,31 @@ The project is a set of focused Python notebooks in one Git folder. Numbered nam
 | `00_configuration` | Reusable | Single source of truth: namespace, Volume layout, model services, the document metadata contract (including configurable domain attributes), chunking and retrieval settings, and the project-scoped reset |
 | `10_document_framework` | Reusable | Document contract, parsing/chunking/validation utilities, and `ensure_storage()` (Delta tables + manifest/registry views) |
 | `20_ingestion_publication` | Reusable | `ingest_and_publish()` and active-chunk publication, with a guarded operational entry |
-| `30_retrieval_answers` | Reusable | Embedding-aware, registry-validated retrieval (`search_current_documents()`) and grounded answers (`ask()`) |
+| `30_retrieval_answers` | Reusable | Embedding-aware, registry-validated retrieval (`search_current_documents()`) and grounded answers (`ask()`), with best-effort request logging linked by `request_id` across `retrieval_audit`, `request_log`, and `embedding_log` |
 | `40_demo_generation` | Demo/test | Agriculture fixtures, V1/V2 ingestion, the baseline 8-day answer, and the controlled V2 → V3 update with assertions |
-| `45_robustness_checks` | Demo/test | Regression tests: late-arriving old files, invalid metadata, conflicting content, future dates, embedding reuse, ingestion idempotency, and automatic fixture cleanup |
+| `45_robustness_checks` | Demo/test | Regression tests: late-arriving old files, invalid metadata, conflicting content, future dates, embedding reuse, ingestion idempotency, and automatic fixture cleanup — the cleanup runs in a `finally` block, so it executes even when an assertion fails |
 | `50_inspect_audit` | Inspection | Displays the manifest, quarantine records, and retrieval audit |
+| `60_evaluation` | Evaluation | Reusable harness (`%run`s `30` definitions only — no demo rerun; evaluates the existing pipeline state): deterministic, model-based, and manual-review assessments persisted to `evaluation_results_raw` and surfaced through the curated `evaluation_results` / `evaluation_run_summary` views (created by `10`) |
+| `65_stage2_verification` | Verification | Stage 2 verification against the existing state (`%run`s `30` only): view grains/legacy/duplicate assertions, mocked-inference fallback (no real model calls, `log_context='simulated'`), caught-exception fixture cleanup, simulated evaluation-run persistence, and one guarded live RAG smoke test (real models). **Not yet executed** — see [Remaining verification](#remaining-verification) |
 
-Dependency chain (`%run`):
+Notebook `%run` dependencies — who imports whom. This is a **dependency map, not an execution order**:
 
 ```text
 00_configuration
   └── 10_document_framework
         ├── 20_ingestion_publication ─┐
-        ├── 30_retrieval_answers ─────┤
-        │                             └── 40_demo_generation ── 45_robustness_checks
+        └── 30_retrieval_answers ─────┤
+                                      └── 40_demo_generation ── 45_robustness_checks
+
+60_evaluation             %runs 30_retrieval_answers (definitions only)
+65_stage2_verification    %runs 30_retrieval_answers (definitions only)
 ```
+
+Recommended execution order: `00` → `10` → `40` → (`45`) → (`50`) → (`60`) → (`65`, once, manually). `60_evaluation` and `65_stage2_verification` import only the retrieval definitions and evaluate the **existing** pipeline state — on a fresh schema run `40` and `45` first; on the completed state both run directly. Neither re-runs the demo or robustness notebooks.
 
 The operational notebooks (00–30) are definitions-only: running or `%run`ning them never generates synthetic files or injects test fixtures into the landing directory. All file generation and adversarial inputs live in `40`/`45`, so an operational ingestion job cannot accidentally fabricate documents.
 
-`45_robustness_checks` writes its four adversarial files into `landing/` for the test batch and removes them (`cleanup_robustness_fixtures()`) when the run finishes, so a normal ingest pass after testing never encounters intentionally invalid or conflicting files. Legitimate source files and accepted history (including the inactive future-dated version) are preserved, and quarantine observations remain in the table as historical records (deduplicated on re-runs).
+`45_robustness_checks` writes its four adversarial files into `landing/` for the test batch and removes them (`cleanup_robustness_fixtures()`) when the run finishes, so a normal ingest pass after testing never encounters intentionally invalid or conflicting files. The cleanup runs in a `finally` block — even a failing assertion cannot leave the adversarial files in operational `landing/`. Legitimate source files and accepted history (including the inactive future-dated version) are preserved, and quarantine observations remain in the table as historical records (deduplicated on re-runs).
 
 ### First run
 
@@ -113,8 +123,10 @@ The operational notebooks (00–30) are definitions-only: running or `%run`ning 
 3. Run `40_demo_generation` top to bottom — generates fixtures, ingests V1/V2, answers the baseline question from V2, publishes V3 from a different filename, and asserts the answer flip. All assertions must pass.
 4. Run `45_robustness_checks` — regression tests (it re-executes the idempotent demo notebook first when run standalone).
 5. Optionally run `50_inspect_audit` to browse the manifest, quarantine, and audit.
+6. Optionally run `60_evaluation` — it `%run`s only the retrieval definitions and evaluates the **existing** pipeline state, persisting granular results and a run summary. On a fresh schema run `40` and `45` first; on the completed state it runs directly.
+7. Optionally run `65_stage2_verification` once, manually — Stage 2 verification of the existing state. It has **not been executed** in this workspace yet; see [Remaining verification](#remaining-verification) for exactly what it does and which cells invoke real models.
 
-On a fresh schema, running `40` alone is sufficient — it `%run`s 00/10/20/30 first. `50` only needs `00`.
+On a fresh schema, running `40` alone is sufficient — it `%run`s 00/10/20/30 first. `50` only needs `00`. `60` and `65` import only `30` (definitions) and expect the completed demo/robustness state.
 
 ### Repeat the demo (reset procedure)
 
@@ -250,8 +262,50 @@ Objects live under `<catalog>.<schema>`. Defaults use the currently selected cat
 | `chunk_embeddings` | Delta table | Embeddings stored as JSON strings, keyed by chunk/model |
 | `quarantined_documents` | Delta table | Source path, content hash, reason, and observation timestamp |
 | `retrieval_audit` | Delta table | Questions, retrieval mode, candidate refs, accepted refs, and rejected count |
+| `request_log` | Delta table | One row per request, linked by `request_id`: retrieval/answer modes, configured models, accepted version refs, rejected stale-candidate count, latencies, errors, and fallback reasons |
+| `embedding_log` | Delta table | Application-submitted embedding requests and cache-reuse observations (document vs query) — not provider-internal inference counts |
+| `evaluation_results_raw` | Delta table | Append-only evaluation results: run_id, test_id, category, assessment type, expected/actual, status, diagnostics, simulated |
+| `document_inventory` | SQL view | Curated: one row per accepted version with `version_status` (ACTIVE / FUTURE_DATED / HISTORICAL_INACTIVE) and pre-aggregated chunk/embedding counts |
+| `quarantine_observations` | SQL view | Curated: quarantine records labeled as observations — resolution is not tracked (`is_resolved` is NULL) |
+| `retrieval_activity` | SQL view | Curated: one row per request; legacy audit history appears once with NULLs (never double counted); `log_context` separates demo/evaluation/operational traffic |
+| `embedding_activity` | SQL view | Curated: one row per candidate text per request; distinguishes submitted embeddings from cache reuse |
+| `evaluation_results` / `evaluation_run_summary` | SQL views | Curated evaluation detail (grain: run_id + test_id) and per-run summary; the pass rate counts executed assessments only |
 
-Table schemas are generated from the metadata contract, so adding a domain attribute grows every history table consistently. The active chunk table has Change Data Feed enabled, but no streaming CDC consumer or Delta Sync search index is implemented.
+Table schemas are generated from the metadata contract, so adding a domain attribute grows every history table consistently. Every curated view documents its grain and joins in a `COMMENT ON VIEW` so requests, versions, and quarantine records cannot be double counted. The active chunk table has Change Data Feed enabled, but no streaming CDC consumer or Delta Sync search index is implemented.
+
+## Operational analytics: dashboard and Genie
+
+Two workspace assets (outside this Git folder) expose the curated operational views. Neither has been shared beyond the workspace. All counts below are dated snapshots from October 31, 2026.
+
+**AI/BI dashboard — “Agri Retrieval Operations (Draft)”** (UUID `01f1d56115a81c139b18c821c3c737ec`; open from the workspace Dashboards list, path `/dashboards/01f1d56115a81c139b18c821c3c737ec`): four pages — Document Inventory, Quarantine Observations, Retrieval Activity, Evaluation. Six datasets are SELECT-only mirrors, exactly one per curated view (no joins, so no fanout or double counting); `embedding_activity` is registered but backs no widget yet. Representative widget renders were verified against SQL counts on October 31, 2026. No synthetic activity was generated to populate charts — the Evaluation page is empty because no evaluation run has been recorded, and latency counters show NULL because all captured traffic is legacy (below).
+
+**Genie agent — “Agri Retrieval Operations Analytics”** (space `01f1d563554c107a82664bbecaf6bdc6`, path `/genie/rooms/01f1d563554c107a82664bbecaf6bdc6`): created over exactly the six curated views — no raw landing/history files are attached. It is scoped to operational analytics only: document-content questions (“what does the current guide say about X”) stay on the version-validated RAG path (`ask()` in `30_retrieval_answers`) and are never answered from these views. **Pending:** its instructions (status semantics, legacy-NULL handling, simulated-vs-live separation, RAG routing) and sample questions with trusted example SQL still need to be pasted in, and question-level validation has not been performed.
+
+### Metric grains and semantics
+
+| View | Grain | Notes |
+|---|---|---|
+| `document_inventory` | one row per accepted version | `version_status`: `ACTIVE` = latest eligible business date; `FUTURE_DATED` = accepted, inactive until its date is eligible and publication runs; `HISTORICAL_INACTIVE` = superseded, retained for traceability |
+| `quarantine_observations` | one row per quarantine record | Historical **observations** captured at ingestion time; the source file may since have been removed or corrected. Resolution is not tracked — `is_resolved` is NULL by design and must not be read as “unresolved” |
+| `retrieval_activity` | exactly one row per request | `record_source` separates `legacy_audit` history from `request_log` traffic; `log_context` labels `demo` / `evaluation` / `operational` traffic, and NULL `log_context` means legacy audit history |
+| `embedding_activity` | one row per candidate text per request | Distinguishes submitted embedding requests from cache reuse |
+| `evaluation_results` | one row per (run_id, test_id) | `simulated=true` marks controlled-injection or mocked results |
+| `evaluation_run_summary` | one row per evaluation run | `pass_rate_executed` = passed/(passed+failed) over executed assessments only |
+
+**Legacy NULL measurements:** pre-Stage-2 audit history (the 8 `legacy_audit` requests in the October 31, 2026 snapshot) never captured retrieval/answer modes, models, latencies, errors, or fallback reasons. Those columns are NULL in `retrieval_activity` — never coalesced to 0 or “unknown” — and each legacy request appears exactly once (never double counted). Latency statistics therefore apply only to post-Stage-2 `request_log` traffic and are honestly NULL until such traffic exists.
+
+**Simulated versus live traffic:** mocked or controlled-injection requests are explicitly labeled (`log_context='simulated'` in `request_log`; `simulated=true` in evaluation results) and are never presented as live evidence. Live requests carry their real `log_context` (`demo`, `evaluation`, or `operational`).
+
+**Cross-run pass rates:** `pass_rate_executed` is exact per run. To aggregate across runs, sum `passed` and executed (`passed`+`failed`) counts **within a consistent assessment-type and simulation category** and divide — do not average per-run percentages (unequal denominators weight runs unequally, and mixing simulated with live, or executed with manual-review, categories is meaningless):
+
+```sql
+-- Overall pass rate for executed, non-simulated deterministic assessments:
+SELECT COUNT_IF(status = 'PASS') / COUNT(*) AS overall_pass_rate
+FROM workspace.agri_retrieval_poc.evaluation_results
+WHERE counted_in_pass_rate AND NOT simulated AND assessment_type = 'deterministic'
+```
+
+(The draft dashboard's pass-rate counter averages per-run `pass_rate_executed`; treat it as exact only for a single run and recompute from summed counts for cross-run comparisons.)
 
 ## Quick start
 
@@ -265,12 +319,12 @@ No notebook-level package installation, external API key, model download, or add
 
 ### Run
 
-Follow the [execution order](#project-structure-and-execution-order): `00` → `10` → `40` → (`45`) → (`50`). On a fresh schema, `40` alone is sufficient because it `%run`s the reusable modules first.
+Follow the [execution order](#project-structure-and-execution-order): `00` → `10` → `40` → (`45`) → (`50`) → (`60`) → (`65`, once, manually). On a fresh schema, `40` alone is sufficient because it `%run`s the reusable modules first.
 
 ### Ask questions
 
 ```python
-result = ask("What is the irrigation review interval for wheat?", "AGR-001")
+result = ask("What is the irrigation review interval for wheat?", "AGR-001")  # context= labels traffic: demo/evaluation/operational
 print(result["answer"])
 print(result["sources"])
 print(result["mode"])
@@ -295,6 +349,8 @@ Domain attributes such as `crop`, `region`, and `topic` are retained metadata. D
 | Answer response | `RETRY` | Evidence changed before the answer was released |
 
 Retrieval and answer modes are independent: a generated answer could use TF-IDF evidence, and semantic retrieval could return excerpts if chat is unavailable. Check both to demonstrate the full RAG path. Fallback execution is always labeled — never report a full RAG success unless semantic retrieval and LLM-generated answers actually ran.
+
+Each request is also recorded in `request_log` and linked by `request_id` across `retrieval_audit` and `embedding_log`, including a `fallback_reason` (for example the labeled TF-IDF downgrade) and a `log_context` traffic label — `demo` from `40`/`45`, `evaluation` from `60`, `operational` by default. Logging is best-effort and guarded: an observability failure prints a warning and never changes version eligibility, evidence, or answers.
 
 ## Demonstration and validation
 
@@ -347,6 +403,16 @@ The fixtures intentionally give the same question different answers across revis
 These are observations from full sequential executions in this workspace, not a complete accuracy benchmark. Stable embedding row counts show no additional stored vectors; alone they do **not** prove that no inference requests occurred. The code's missing-vector check supports reuse; stronger verification would count model calls. The captured vectors cover queried AGR-001 versions, not all five documents.
 
 The future-dated fixture now uses a business date **relative to the test run** (current date + 30 days), so the future-inactive check never expires and needs no manual date maintenance.
+
+### Stage 2 storage validation (SQL-verified, October 31, 2026)
+
+After the Stage 2 storage migration ran additively (definitions only — no reset, no demo rerun, no model calls), direct SQL checks confirmed: `document_inventory` = 12 rows (5 `ACTIVE` / 6 `HISTORICAL_INACTIVE` / 1 `FUTURE_DATED`); no document with more than one `ACTIVE` version; `quarantine_observations` = 3 = `quarantined_documents`; no duplicate `request_id` rows in `request_log`; `retrieval_activity` = 8 rows = 8 `legacy_audit` + 0 `request_log`, with legacy NULLs fully preserved; evaluation tables and views valid and empty. Representative dashboard renders matched these counts. These are dated snapshot observations.
+
+### Remaining verification
+
+**`65_stage2_verification` has not been executed.** No saved execution evidence exists, so nothing it checks may be reported as passed. Automated execution was blocked by the workspace safety gate because the notebook contains one live-inference cell, and it was not retried through another mechanism. Until it runs once, the following remain **unverified**: the mocked-inference fallback path (labeled `log_context='simulated'`), observability isolation on malformed log rows, fixture cleanup under a caught exception, evaluation persistence of a `SIMULATED-` run, and the single live RAG smoke test.
+
+To run it: open `65_stage2_verification` and run all cells top to bottom **once**. Every cell makes no real model call except **“Single live RAG smoke test (guarded)”**, which performs one real query embedding plus one real grounded answer (`ask(..., context='evaluation')`) and reports a gap instead of failing if live inference is unavailable. The mocked-inference cell monkeypatches the embedding service to raise and disables chat; its traffic and the persisted `SIMULATED-` evaluation run are labeled simulated. Running the notebook appends that simulated run, which populates the dashboard Evaluation page with clearly labeled simulated data. Note: `60_evaluation`'s “model-based checks” cell also makes real model calls whenever that notebook is executed.
 
 ### Suggested demo narrative
 
@@ -403,6 +469,9 @@ The [embedding-query documentation](https://docs.databricks.com/aws/en/machine-l
 | Three quarantine records after robustness tests | Historical observations only — `45` removes its fixture files from `landing/` automatically; the quarantine table preserves the records, and re-runs deduplicate them. |
 | Want to change an accepted document | Publish a new `version_id` and a distinct business date; do not overwrite a revision. |
 | New model or configuration | Rerun `00_configuration` and the retrieval module so in-memory model state and the query-vector cache reset. |
+| Request/embedding log rows missing | Observability is best-effort: a failure prints an `Observability warning` and skips the row — inspect the notebook output; retrieval itself is unaffected. |
+| Evaluation tables/views empty | Expected until an evaluation run is recorded — run `60_evaluation`, or `65_stage2_verification` (whose evaluation rows are a labeled `SIMULATED-` run). |
+| Dashboard latency counters show NULL | All captured traffic is legacy audit history; the counters populate once post-Stage-2 `request_log` traffic exists. |
 
 `45_robustness_checks` cleans up its four fixture files automatically; nothing needs to be moved after testing. Keep the accepted `new_field_manual_1.md`; its quarantine entry reflects the ambiguous test batch, not invalid accepted history. The current code does not automatically clear resolved quarantine entries or move files into a quarantine folder.
 
@@ -420,12 +489,12 @@ For scheduled ingestion, run `20_ingestion_publication` with `AUTO_RUN_INGESTION
 | No score threshold or semantic answerability evaluation | Add relevance thresholds, abstention tests, and groundedness evaluation |
 | Citation formatting is prompted | Validate citations against supplied sources programmatically |
 | No document-level access filter | Enforce authorization before retrieval and model context assembly |
-| Retrieval-only audit | Add model identity/revision, answer mode, latency, inference usage, and evaluation outcomes |
+| Per-request logging is application-level | Add provider-side usage/inference accounting — `embedding_log` counts application-submitted requests and cache reuse, not provider-internal inference counts |
 | Model name is the vector cache key | Track immutable embedding model revisions and re-embed after model changes |
 
 Free Edition currently permits a limited AI Search endpoint; this project omits it because exact search is sufficient for the small corpus, not because the service is categorically unavailable.
 
-Planned but **not implemented** on this branch yet: a reusable evaluation harness with persisted results, curated operational views/observability, an AI/BI dashboard, and a Genie analytics asset over the operational views.
+Implemented on this branch: Stage 2 — best-effort operational request logging, grain-documented curated views, failure-safe test fixture cleanup, and a reusable evaluation harness with persisted results. Stages 3–4 — the AI/BI dashboard and the Genie analytics agent (both **draft**: the dashboard is not shared and has a widget-less `embedding_activity` dataset; the Genie agent awaits pasted instructions and question validation). Still **not executed/verified**: `65_stage2_verification` and any evaluation run — see [Remaining verification](#remaining-verification).
 
 Additional scope boundaries:
 
@@ -437,6 +506,7 @@ Additional scope boundaries:
 
 ## References
 
+- Sridevi Loya, “Maintaining Current and Traceable Knowledge in AI-Enabled Agricultural Advisory Systems,” Medium, September 18, 2026 — conceptual background on stable document identity, retained history, lifecycle metadata, and traceability in AI-enabled agricultural advisory systems (the article does not document or validate this code): <https://medium.com/@sridevi.loya/maintaining-current-and-traceable-knowledge-in-ai-enabled-agricultural-advisory-systems-15c555ed0e02>
 - [Databricks Free Edition limits](https://docs.databricks.com/aws/en/getting-started/free-edition-limitations)
 - [Query an embedding model](https://docs.databricks.com/aws/en/machine-learning/model-serving/query-embedding-models)
 - [Use ai_query](https://docs.databricks.com/aws/en/large-language-models/ai-query)
@@ -446,4 +516,4 @@ Additional scope boundaries:
 - [GTE model card and license](https://huggingface.co/Alibaba-NLP/gte-large-en-v1.5)
 - [GPT-OSS model card and license](https://huggingface.co/openai/gpt-oss-20b)
 
-**Project placement:** This README lives at the root of `agri-document-retrieval` alongside the numbered project notebooks (`00_configuration` … `50_inspect_audit`). Keep the notebook sources under Git version control rather than relying on exports; the earlier single-notebook implementation remains in the repository history. The Stage 1 restructure and its close-out are committed on the `reusable-framework-dashboard` enhancement branch.
+**Project placement:** This README lives at the root of `agri-document-retrieval` alongside the numbered Python notebooks (`00_configuration` … `65_stage2_verification`). The implementation is these Python notebooks; an HTML rendering circulated during an earlier review was a static reading export only, never the implementation. Keep the notebook sources under Git version control rather than relying on exports; the earlier single-notebook implementation remains in the repository history. The Stage 1 restructure and its close-out are committed on the `reusable-framework-dashboard` enhancement branch; the Stage 2–4 changes (five modified notebooks, this README, and the untracked `60_evaluation` / `65_stage2_verification`) sit in the working tree of the same branch, not yet committed — no commit/push/merge without explicit instruction. The dashboard and Genie agent are workspace assets versioned by the workspace, not this Git folder.
