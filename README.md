@@ -1,6 +1,6 @@
-# Agriculture Document Retrieval
+# Maintaining Current and Traceable Knowledge in AI-Enabled Agricultural Advisory Systems
 
-### Version-aware RAG on Databricks — a reusable framework with an agriculture demo
+### A reusable Databricks framework for version-aware document retrieval and grounded answers
 
 Retrieve knowledge from the latest eligible version of a document—even when its filename changes—while retaining earlier versions for traceability.
 
@@ -10,7 +10,7 @@ This project combines embedded document metadata, Delta-based version tracking, 
 
 **Conceptual background:** [Maintaining Current and Traceable Knowledge in AI-Enabled Agricultural Advisory Systems](https://medium.com/@sridevi.loya/maintaining-current-and-traceable-knowledge-in-ai-enabled-agricultural-advisory-systems-15c555ed0e02) (Sridevi Loya, Medium, September 18, 2026) discusses why AI-enabled agricultural advisory systems need stable document identity, retained version history, lifecycle metadata, and traceable answers. The article is a conceptual treatment of the problem space — it does not document or validate this code. This repository implements the retrieval core of that idea: latest-eligible accepted-version retrieval with retained history and version-checked citations. Business approval workflows, document expiry/withdrawal, and full lifecycle governance are **not** implemented.
 
-> **Implementation and evidence:** This README describes the Python notebook project in this folder and its captured outputs, executed and validated in this workspace on October 31, 2026. It documents a notebook-hosted RAG framework, not a deployed autonomous agent or production service. All agriculture content and intervals are fictional demonstration data.
+> **Implementation and evidence:** This README describes the Python notebook project in this folder and its captured outputs. The core RAG demonstration was validated in this workspace. Stage 2–4 additions have partial validation; remaining checks are documented below. It documents a notebook-hosted RAG framework, not a deployed autonomous agent or production service. All agriculture content and intervals are fictional demonstration data.
 
 ## Contents
 
@@ -279,7 +279,7 @@ Two workspace assets (outside this Git folder) expose the curated operational vi
 
 **AI/BI dashboard — “Agri Retrieval Operations (Draft)”** (UUID `01f1d56115a81c139b18c821c3c737ec`; open from the workspace Dashboards list, path `/dashboards/01f1d56115a81c139b18c821c3c737ec`): four pages — Document Inventory, Quarantine Observations, Retrieval Activity, Evaluation. Six datasets are SELECT-only mirrors, exactly one per curated view (no joins, so no fanout or double counting); `embedding_activity` is registered but backs no widget yet. Representative widget renders were verified against SQL counts on October 31, 2026. No synthetic activity was generated to populate charts — the Evaluation page is empty because no evaluation run has been recorded, and latency counters show NULL because all captured traffic is legacy (below).
 
-**Genie agent — “Agri Retrieval Operations Analytics”** (space `01f1d563554c107a82664bbecaf6bdc6`, path `/genie/rooms/01f1d563554c107a82664bbecaf6bdc6`): created over exactly the six curated views — no raw landing/history files are attached. It is scoped to operational analytics only: document-content questions (“what does the current guide say about X”) stay on the version-validated RAG path (`ask()` in `30_retrieval_answers`) and are never answered from these views. **Pending:** its instructions (status semantics, legacy-NULL handling, simulated-vs-live separation, RAG routing) and sample questions with trusted example SQL still need to be pasted in, and question-level validation has not been performed.
+**Genie agent — “Agri Retrieval Operations Analytics”** (space `01f1d563554c107a82664bbecaf6bdc6`, path `/genie/rooms/01f1d563554c107a82664bbecaf6bdc6`): created over exactly the six curated views — no raw landing/history files are attached. It is scoped to operational analytics only: document-content questions (“what does the current guide say about X”) stay on the version-validated RAG path (`ask()` in `30_retrieval_answers`) and are never answered from these views. **Pending:** its instructions (status semantics, legacy-NULL handling, simulated-vs-live separation, RAG routing) and sample questions with trusted example SQL still need to be pasted in — Genie configuration is not directly editable from the tools used for the notebooks, so this is a manual step (do not bake dated snapshot counts into permanent instructions). Question-level validation was performed on October 31, 2026: two representative questions (version-status counts; legacy vs current traffic) were both answered with correct SQL matching the ground truth (5 `ACTIVE` / 6 `HISTORICAL_INACTIVE` / 1 `FUTURE_DATED`; 8 `legacy_audit` / 0 `request_log` — dated snapshot).
 
 ### Metric grains and semantics
 
@@ -299,13 +299,15 @@ Two workspace assets (outside this Git folder) expose the curated operational vi
 **Cross-run pass rates:** `pass_rate_executed` is exact per run. To aggregate across runs, sum `passed` and executed (`passed`+`failed`) counts **within a consistent assessment-type and simulation category** and divide — do not average per-run percentages (unequal denominators weight runs unequally, and mixing simulated with live, or executed with manual-review, categories is meaningless):
 
 ```sql
--- Overall pass rate for executed, non-simulated deterministic assessments:
-SELECT COUNT_IF(status = 'PASS') / COUNT(*) AS overall_pass_rate
+-- Overall pass rate for executed, non-simulated deterministic assessments.
+-- try_divide returns NULL instead of raising DIVIDE_BY_ZERO when no matching tests exist
+-- (this workspace runs ANSI mode, where plain / on a zero denominator errors):
+SELECT try_divide(COUNT_IF(status = 'PASS'), COUNT(*)) AS overall_pass_rate
 FROM workspace.agri_retrieval_poc.evaluation_results
 WHERE counted_in_pass_rate AND NOT simulated AND assessment_type = 'deterministic'
 ```
 
-(The draft dashboard's pass-rate counter averages per-run `pass_rate_executed`; treat it as exact only for a single run and recompute from summed counts for cross-run comparisons.)
+(The dashboard's overall pass-rate counter computes summed live passed ÷ summed live executed tests directly from row-level `evaluation_results` — simulated rows are excluded so live and simulated results are never mixed, `NOT_EXECUTED` and manual-review rows are excluded via `counted_in_pass_rate`, and it returns NULL (never zero, never an average of per-run percentages) when no executed tests exist. It responds to the page filters, so filtering by run ID or assessment type recomputes the rate within that consistent category. The run-level table still shows each run's own `pass_rate_executed`, and simulated runs are distinguishable there by their `simulated_tests` counts.)
 
 ## Quick start
 
