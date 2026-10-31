@@ -519,3 +519,8 @@ Additional scope boundaries:
 - [GPT-OSS model card and license](https://huggingface.co/openai/gpt-oss-20b)
 
 **Project placement:** This README lives at the root of `agri-document-retrieval` alongside the numbered Python notebooks (`00_configuration` … `65_stage2_verification`). The implementation is these Python notebooks; an HTML rendering circulated during an earlier review was a static reading export only, never the implementation. Keep the notebook sources under Git version control rather than relying on exports; the earlier single-notebook implementation remains in the repository history. The Stage 1 restructure and its close-out are committed on the `reusable-framework-dashboard` enhancement branch; the Stage 2–4 changes (five modified notebooks, this README, and the untracked `60_evaluation` / `65_stage2_verification`) sit in the working tree of the same branch, not yet committed — no commit/push/merge without explicit instruction. The dashboard and Genie agent are workspace assets versioned by the workspace, not this Git folder.
+
+## License
+
+This project is licensed under the Apache License 2.0. See [LICENSE](LICENSE) for details.
+
