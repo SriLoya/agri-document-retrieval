@@ -1,5 +1,8 @@
 # Maintaining Current and Traceable Knowledge in AI-Enabled Agricultural Advisory Systems
 
+### Overview
+Agricultural guidance is revised over time, so a document collection can hold several versions of the same guide. If every version stays searchable, an AI assistant can mix old and new instructions or cite an outdated source. This framework makes sure answers use evidence only from the latest eligible version of each document, selected by its document date. Each file carries an embedded document ID, so a revision is recognized even if its file name changes. Earlier versions are kept for traceability but are excluded from answers. Each answer returns its sources, including the document ID, version and date. Files with missing or conflicting information are quarantined instead of published. In the demo, a wheat question returns "8 days" from version 2. After version 3 is published under a new file name, the same question returns "6 days" and cites version 3. The demo uses fictional sample documents. Approval, expiry and withdrawal workflows are not yet implemented. It is open source under the Apache-2.0 license and runs as a set of Databricks notebooks.
+
 ### A reusable Databricks framework for version-aware document retrieval and grounded answers
 
 Retrieve knowledge from the latest eligible version of a document—even when its filename changes—while retaining earlier versions for traceability.
